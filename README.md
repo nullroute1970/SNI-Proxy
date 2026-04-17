@@ -695,6 +695,8 @@ In interactive mode (default), you can:
 
 ## Terminal Output
 
+![SNI-Proxy Terminal Output](images/sni-proxy.PNG)
+
 All console output uses [`rich`](https://pypi.org/project/rich/) for styled, structured terminal UI.
 
 ### Startup Banner
