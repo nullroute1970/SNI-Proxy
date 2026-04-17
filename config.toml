@@ -1,0 +1,365 @@
+# =============================================================================
+# SNI-Proxy Configuration
+# =============================================================================
+# This file controls all runtime parameters for the SNI spoofing DPI bypass
+# proxy. Edit the values below to match your network environment and desired
+# bypass strategy.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Proxy Listener Settings
+# -----------------------------------------------------------------------------
+# These control the local TCP proxy that your browser or client connects to.
+
+# The local IP address the proxy listens on.
+# Use "127.0.0.1" to accept connections only from this machine (recommended).
+# Use "0.0.0.0" to accept connections from any network interface (use with caution).
+LISTEN_HOST = "0.0.0.0"
+
+# The local TCP port the proxy listens on.
+# Configure your browser/client to connect to this port (e.g. SOCKS or direct TCP).
+# Make sure this port is not already in use by another application.
+LISTEN_PORT = 40443
+
+
+# -----------------------------------------------------------------------------
+# Target Server Settings
+# -----------------------------------------------------------------------------
+# These define the upstream server the proxy connects to on behalf of the client.
+#
+# SNI domains are configured in sni_list.txt (one domain per line).
+# At startup, the app checks all listed SNIs and lets you pick one.
+# See sni_list.txt for details.
+
+# (Optional) The TCP port to connect to on the target server.
+# Defaults to 443 (standard HTTPS) if not specified.
+# Only change this if the target server uses a non-standard TLS port.
+# CONNECT_PORT = 443
+
+
+# -----------------------------------------------------------------------------
+# DPI Bypass Method
+# -----------------------------------------------------------------------------
+# Selects which technique the proxy uses to evade Deep Packet Inspection.
+#
+# Available methods:
+#
+#   "wrong_seq"          - (Default) Injects a fake ClientHello with a deliberately
+#                          wrong TCP sequence number. DPI sees the allowed SNI but
+#                          the server silently drops the out-of-sequence packet.
+#
+#   "wrong_checksum"     - Injects a fake ClientHello with a valid sequence number
+#                          but an invalid TCP checksum. DPI engines that skip checksum
+#                          validation see the allowed SNI; the server drops it.
+#
+#   "low_ttl"            - Injects a fake ClientHello with a low IP TTL so it reaches
+#                          the DPI middlebox but expires before reaching the server.
+#                          Requires tuning FAKE_TTL based on your network topology.
+#
+#   "tcp_segmentation"   - Splits the real TLS ClientHello into tiny TCP segments so
+#                          DPI cannot reassemble the SNI from any single packet. Does
+#                          NOT inject fake packets or use WinDivert interception.
+#
+#   "duplicate_syn"      - (Experimental) Sends a duplicate SYN carrying the fake
+#                          ClientHello as payload. DPI sees the SNI; the server
+#                          treats it as a retransmission and ignores the extra data.
+#
+#   "ip_fragmentation"   - Sends the fake ClientHello as two IP fragments so the SNI
+#                          field spans the fragment boundary. DPI that doesn't
+#                          reassemble IP fragments cannot extract the SNI.
+#
+#   "fake_rst"           - Sends a fake TCP RST with a wrong sequence number to trick
+#                          DPI into dropping connection tracking state. Subsequent
+#                          real traffic passes through uninspected.
+#
+#   "tls_record_frag"    - Splits the real ClientHello into multiple small TLS record
+#                          fragments at the application layer. DPI cannot reconstruct
+#                          the SNI from any single record. No fake packet injection.
+#
+#   "tcp_urgent_pointer" - Sends the fake ClientHello with the TCP URG flag and an
+#                          urgent pointer to desync DPI's view of the data stream.
+#                          Combines wrong sequence number with urgent pointer evasion.
+BYPASS_METHOD = "wrong_seq"
+
+
+# -----------------------------------------------------------------------------
+# Method-Specific Tuning Parameters
+# -----------------------------------------------------------------------------
+# These parameters fine-tune the behavior of specific bypass methods.
+# They are only used when the corresponding BYPASS_METHOD is selected.
+
+# [low_ttl] The IP Time-To-Live value for the fake packet.
+# This controls how many network hops the fake packet survives before being
+# discarded by a router. Set this to a value high enough to reach the DPI
+# middlebox but low enough that the packet expires before reaching the real
+# server. Typical values: 1-5, depending on your network path.
+# Only used when BYPASS_METHOD = "low_ttl".
+FAKE_TTL = 1
+
+# [tcp_segmentation / tls_record_frag] Number of bytes per TCP segment.
+# The real ClientHello is split into chunks of this size. Smaller values
+# create more segments and make SNI reconstruction harder for DPI, but
+# increase overhead. Minimum recommended: 1. Typical: 2-5.
+# Used when BYPASS_METHOD = "tcp_segmentation".
+SEGMENT_SIZE = 2
+
+# [tcp_segmentation / tls_record_frag] Delay in seconds between sending
+# each segment or TLS record fragment.
+# A small delay ensures each chunk is sent as a separate TCP packet rather
+# than being coalesced by the OS. Too large a value slows down the handshake.
+# Typical: 0.001 (1 millisecond).
+# Used when BYPASS_METHOD = "tcp_segmentation" or "tls_record_frag".
+SEGMENT_DELAY = 0.001
+
+# [ip_fragmentation] The byte offset at which the IP packet is split into
+# two fragments. Must be a multiple of 8 (IP fragmentation requirement).
+# The goal is to split the packet so the SNI field spans the fragment
+# boundary, preventing DPI from reading it from a single fragment.
+# Typical: 8-24. If the value exceeds the payload size, it is automatically
+# adjusted to half the payload length (rounded down to a multiple of 8).
+# Only used when BYPASS_METHOD = "ip_fragmentation".
+IP_FRAG_OFFSET = 8
+
+# [tls_record_frag] Number of bytes per TLS record fragment.
+# The real ClientHello's handshake payload is re-wrapped into multiple TLS
+# records, each containing at most this many bytes. Smaller values make
+# reconstruction harder for DPI. Must be at least 1.
+# Only used when BYPASS_METHOD = "tls_record_frag".
+TLS_RECORD_FRAG_SIZE = 5
+
+# [tcp_urgent_pointer] The size (in bytes) of the urgent data prefix set
+# in the TCP urgent pointer field. This shifts where DPI thinks the
+# application data starts, causing it to misparse the SNI field.
+# Only used when BYPASS_METHOD = "tcp_urgent_pointer".
+URGENT_POINTER_SIZE = 3
+
+
+# -----------------------------------------------------------------------------
+# Connection & Timing Parameters
+# -----------------------------------------------------------------------------
+# These control TCP socket behavior, timeouts, and internal injection timing.
+# Adjust these if connections are unstable or if your network has high latency.
+
+# Maximum time (in seconds) to wait for the packet injector to confirm
+# that the DPI bypass succeeded (i.e., the server acknowledged the real
+# handshake while ignoring the fake packet). If the timeout expires before
+# confirmation arrives, the connection is dropped and the client must retry.
+#
+# Only relevant for injection-based methods:
+#   wrong_seq, wrong_checksum, low_ttl, duplicate_syn,
+#   ip_fragmentation, fake_rst, tcp_urgent_pointer.
+# Not used by tcp_segmentation or tls_record_frag (no injection involved).
+#
+# Scenarios and recommended values:
+#   - Fast, stable home/office internet (< 50 ms RTT to server):  3
+#   - Average broadband with occasional jitter (50–150 ms RTT):   5
+#   - Slow or congested connection, mobile data, VPN (> 150 ms):  8–12
+#   - Frequent "connection failed" errors during handshake:       increase by 2–3
+#   - Connections succeed but you want snappier failure feedback:  decrease by 1–2
+#
+# Default: 8  (safe for most users; tune down for low-latency links)
+BYPASS_TIMEOUT = 8
+
+# Maximum time (in seconds) to wait for the client to send its first data
+# (the real TLS ClientHello) after connecting to the proxy.
+# Used by tcp_segmentation and tls_record_frag methods, which need to read
+# the client's real ClientHello before splitting it into small segments.
+# Increase this if clients are slow to send their first packet.
+CLIENT_DATA_TIMEOUT = 5
+
+# Delay (in seconds) before injecting the fake packet after the TCP 3-way
+# handshake completes. This brief pause ensures the real ACK is transmitted
+# and processed before the fake packet is sent.
+# Only relevant for injection-based methods (wrong_seq, wrong_checksum,
+# low_ttl, ip_fragmentation, fake_rst, tcp_urgent_pointer).
+# Increase if the fake injection races with the real ACK on slow systems.
+FAKE_INJECT_DELAY = 0.001
+
+
+# -----------------------------------------------------------------------------
+# TCP Keep-Alive Settings
+# -----------------------------------------------------------------------------
+# These control the TCP keep-alive behavior for all sockets managed by the
+# proxy (listening socket, incoming client sockets, and outgoing server
+# sockets). Keep-alive probes detect dead connections and free resources.
+#
+# How it works: after KEEPALIVE_IDLE seconds of inactivity, the OS sends a
+# probe. If no response, it retries every KEEPALIVE_INTERVAL seconds, up to
+# KEEPALIVE_COUNT times. If all probes fail, the connection is closed.
+
+# Seconds of idle time (no data exchanged) before the OS sends the first
+# keep-alive probe. A shorter value detects stale/dead connections faster
+# but generates slightly more background traffic on idle links.
+#
+# Scenarios and recommended values:
+#   - Streaming / gaming (data flows almost constantly):           30–60
+#   - Web browsing / API calls (bursts with idle gaps):            60–120
+#   - Chat or long-lived idle connections (e.g. messaging apps):   120–300
+#   - Unstable connection that drops silently (detect fast):       10–20
+#   - You see frequent unexpected disconnects on idle sessions:    increase this
+#
+# Default: 60
+KEEPALIVE_IDLE = 60
+
+# Seconds between each successive keep-alive probe after the first one.
+# Once probing starts (after KEEPALIVE_IDLE seconds of silence), probes are
+# sent this often until a response arrives or KEEPALIVE_COUNT is exhausted.
+#
+# Scenarios and recommended values:
+#   - Fast, stable link — want quick dead-connection cleanup:      2–5
+#   - Average broadband with occasional packet loss:               5–10
+#   - Slow / high-loss link (mobile data, congested ISP):          10–15
+#   - Setting too low on a lossy link causes false disconnects.
+#
+# Default: 10
+KEEPALIVE_INTERVAL = 10
+
+# Maximum number of unanswered keep-alive probes before the connection is
+# considered dead and forcibly closed. Total detection time after the idle
+# period equals KEEPALIVE_INTERVAL * KEEPALIVE_COUNT seconds.
+#
+#   Total dead-connection detection time (after idle period):
+#     = KEEPALIVE_INTERVAL × KEEPALIVE_COUNT
+#   Example (defaults): 10 s × 5 probes = 50 s after the idle period.
+#
+# Scenarios and recommended values:
+#   - Reliable, low-loss network (want fast cleanup):              2–3
+#   - Average network with occasional bursts of packet loss:       3–5
+#   - High-loss / intermittent connection (avoid false drops):     5–8
+#   - If connections drop unexpectedly on a lossy link, increase
+#     this before reducing KEEPALIVE_INTERVAL.
+#
+# Default: 5
+KEEPALIVE_COUNT = 5
+
+
+# -----------------------------------------------------------------------------
+# Metrics Dashboard
+# -----------------------------------------------------------------------------
+# How often (in seconds) to print connection metrics to the console.
+# Set to 0 to disable periodic metrics output.
+METRICS_INTERVAL = 10
+
+
+# -----------------------------------------------------------------------------
+# SNI Selection Behavior
+# -----------------------------------------------------------------------------
+# Whether to display SNIs that failed connectivity checks during the initial
+# SNI scan (DNS resolution failures or TCP connect failures).
+# Set to true  → show all SNIs, including unreachable ones (default).
+# Set to false → hide failed SNIs from the list so only reachable ones appear.
+# Note: even when set to false, you can still manually enter the number of a
+# hidden SNI if you know it — it will be accepted with a warning.
+SHOW_FAILED_SNIS = true
+
+
+# -----------------------------------------------------------------------------
+# SNI Scanner Settings
+# -----------------------------------------------------------------------------
+# These control the enhanced SNI scanner that runs at startup.
+
+# Number of concurrent threads used for scanning SNIs.
+# Higher values speed up the scan but may be rate-limited by some networks.
+# Increase for large sni_list.txt files; decrease on slow/unstable connections.
+SCAN_WORKERS = 20
+
+# Per-SNI timeout (in seconds) for DNS resolution + TCP connect + TLS probe.
+# Increase on high-latency networks where 2 seconds is not enough.
+SCAN_TIMEOUT = 2.0
+
+# Whether to perform a full TLS handshake probe after the TCP connect check.
+# When true, the scanner verifies that the server actually completes a TLS
+# handshake with the given SNI — a stronger reachability signal than TCP alone.
+# Set to false to skip TLS probing and only check TCP connectivity (faster).
+SCAN_TLS_PROBE = true
+
+# Whether to run a TTL/hop-count probe (ICMP ping) for each reachable SNI.
+# The estimated hop count is useful for tuning the FAKE_TTL parameter when
+# using the "low_ttl" bypass method.
+# Set to false to skip the ping probe (faster, or if ICMP is blocked).
+SCAN_TTL_PROBE = true
+
+# How long (in seconds) to cache scan results before re-probing.
+# On subsequent launches within this window, cached results are reused
+# instead of re-scanning (speeds up startup significantly).
+# Set to 0 to always perform a fresh scan (no caching).
+SCAN_CACHE_TTL = 0
+
+# Number of extra retry attempts for SNIs that timed out during the initial
+# parallel scan. These SNIs are re-probed serially with a longer timeout
+# (SCAN_DEGRADED_TIMEOUT) after the main scan finishes.
+#
+# Why this matters:
+#   A TCP connect timeout during the fast parallel scan can be caused by:
+#     - The server rate-limiting connection attempts under load
+#     - High latency that exceeds the short SCAN_TIMEOUT window
+#     - Transient packet loss or network jitter
+#   In all these cases the SNI may actually work fine through the proxy.
+#   SNIs that time out even on retry are marked "Degraded" (yellow) and are
+#   still selectable but expected to have lower quality.
+#   SNIs that come back as "Refused" on retry are downgraded further since
+#   the server actively rejected the connection.
+#
+# Set to 0 to disable the retry pass entirely (faster startup).
+# Typical: 2
+SCAN_DEGRADED_RETRIES = 0
+
+# Timeout (in seconds) for each degraded-SNI retry attempt.
+# Should be longer than SCAN_TIMEOUT to give slow servers a fair chance.
+# Typical: 5.0
+SCAN_DEGRADED_TIMEOUT = 5.0
+
+# Whether to automatically select the best SNI without showing the
+# interactive prompt. The "best" SNI is the one with TLS verified (if
+# probing is enabled), lowest latency, and a known CDN provider.
+# Set to false to always show the interactive selection menu (default).
+AUTO_SELECT_SNI = false
+
+# How often (in minutes) to re-scan SNIs in the background and switch to
+# the best available one. The selected SNI and its resolved IP are updated
+# automatically — if only the IP changes (e.g. CDN rotation), the same
+# domain is kept but the connection target is refreshed and the WinDivert
+# packet filter is restarted to match the new IP.
+# Only used when AUTO_SELECT_SNI = true.
+# Set to 0 to disable background refresh entirely.
+AUTO_SELECT_INTERVAL = 5
+
+
+# -----------------------------------------------------------------------------
+# Connection Limiting
+# -----------------------------------------------------------------------------
+# Maximum number of simultaneous proxy connections.
+# When the limit is reached, new connections wait until an existing one finishes.
+# Set to 0 for unlimited (not recommended in production).
+MAX_CONNECTIONS = 0
+
+
+# -----------------------------------------------------------------------------
+# Performance Tuning  (advanced — safe to leave at defaults)
+# -----------------------------------------------------------------------------
+
+# Size of the read buffer (in bytes) used when relaying data between the
+# client and the upstream server. Larger values reduce the number of
+# system calls on high-throughput connections but consume more memory per
+# relay direction (two buffers per connection).
+# Must be a power of two between 4096 and 1048576 (4 KB – 1 MB).
+# Default: 262144 (256 KB)
+RELAY_BUFFER_SIZE = 262144
+
+# Size (in bytes) of the OS-level send and receive socket buffers set on
+# every proxy socket (listening, incoming client, outgoing server).
+# Larger values help on high-latency or high-bandwidth links by letting
+# the kernel buffer more data in flight, but increase per-socket memory.
+# Must be between 4096 and 4194304 (4 KB – 4 MB).
+# Default: 262144 (256 KB)
+SOCKET_BUFFER_SIZE = 262144
+
+# Number of worker threads in the shared pool used for fake packet
+# injection. Each active bypass occupies a thread for ~1 ms. Increase
+# this if you see injection delays under very high connection rates
+# (hundreds of new connections per second). Has no effect for
+# tcp_segmentation or tls_record_frag bypass methods.
+# Must be between 1 and 256.
+# Default: 32
+INJECTION_POOL_SIZE = 64

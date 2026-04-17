@@ -1,0 +1,74 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string for the pre-release (e.g. dev, v1.0.0-beta)'
+        required: false
+        default: 'dev'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pyinstaller
+
+      - name: Install project dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Build executable
+        run: |
+          python -m PyInstaller `
+            --onefile `
+            --name sni_proxy `
+            --uac-admin `
+            --collect-all pydivert `
+            --hidden-import colorama `
+            --hidden-import tomllib `
+            --noconfirm `
+            main.py
+
+      - name: Copy data files to dist/
+        run: |
+          Copy-Item config.toml     dist\config.toml
+          Copy-Item sni_list.txt    dist\sni_list.txt
+          Copy-Item cdn_ranges.json dist\cdn_ranges.json
+          Copy-Item README.md       dist\README.md
+
+      - name: Determine version
+        id: version
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            echo "version=${{ inputs.version }}" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "version=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Create zip package
+        run: |
+          Compress-Archive -Path dist\* -DestinationPath "sni_proxy-${{ steps.version.outputs.version }}.zip"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: SNI-Proxy ${{ steps.version.outputs.version }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
+          generate_release_notes: true
+          files: sni_proxy-${{ steps.version.outputs.version }}.zip
