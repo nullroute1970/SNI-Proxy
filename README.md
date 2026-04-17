@@ -6,6 +6,14 @@ A Windows-based TCP proxy that bypasses **Deep Packet Inspection (DPI)** firewal
 
 ---
 
+## 📬 Contact & Support
+
+Have questions, feedback, or need help? Join the Telegram channel:
+
+**➡️ [t.me/nulllroute1970](https://t.me/nulllroute1970)**
+
+---
+
 ## Table of Contents
 
 - [How It Works](#how-it-works)
