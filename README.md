@@ -869,3 +869,7 @@ The following improvements have been made to the proxy for better reliability an
 - **`fake_rst` depends on DPI statefulness** — only works against DPI engines that track connection state and honor RST packets to drop flows.
 - **Requires admin rights** — WinDivert needs elevated privileges to install the kernel filter. Elevation is handled automatically: a UAC prompt appears if the process is not already elevated (script mode), or Windows prompts before the process starts (EXE mode with embedded manifest).
 - **DPI-dependent effectiveness** — these techniques work against stateless or weakly-stateful DPI engines. Sophisticated deep inspection systems may not be fooled by all methods. Try different `BYPASS_METHOD` values to find what works for your network.
+
+## Credits
+
+[SNI-Proxy](https://github.com/nullroute1970/SNI-Proxy) was forked from [SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing), and I have made & accumulated a huge number of enhancements.
