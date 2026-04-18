@@ -35,7 +35,8 @@ class TcpInjector(ABC):
 
     def run(self):
         """Main capture loop: receives packets from WinDivert and passes them to inject()."""
-        with self.w:
+        self.w.open()
+        try:
             while True:
                 try:
                     packet = self.w.recv(65575)  # Receive one packet (max 65575 bytes)
@@ -47,3 +48,8 @@ class TcpInjector(ABC):
                         logger.debug("WinDivert injector stopped cleanly.")
                         break
                     logger.exception("Error processing packet in injector loop")
+        finally:
+            try:
+                self.w.close()
+            except (RuntimeError, OSError):
+                pass  # Already closed by stop()

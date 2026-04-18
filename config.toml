@@ -243,6 +243,27 @@ METRICS_INTERVAL = 10
 
 
 # -----------------------------------------------------------------------------
+# Session Logging
+# -----------------------------------------------------------------------------
+# Whether to write a log file for each run.
+# When enabled, a timestamped .log file is created inside the logs/ folder
+# (located next to config.toml / the exe). The folder is created automatically.
+#
+# Each log file contains:
+#   - A session-start header with the date and time
+#   - All application log messages (INFO, WARNING, DEBUG, etc.)
+#   - A plain-text table of the initial SNI scan results
+#   - Tables for any re-scans and background refresh cycles
+#   - The selected SNI and resolved IP after each selection or refresh
+#
+# File naming: logs/YYYY-MM-DD_HH-MM-SS.log  (one file per run)
+# The logs/ folder is safe to delete at any time.
+#
+# Set to true to enable; false to disable (default).
+LOG_TO_FILE = false
+
+
+# -----------------------------------------------------------------------------
 # SNI Selection Behavior
 # -----------------------------------------------------------------------------
 # Whether to display SNIs that failed connectivity checks during the initial

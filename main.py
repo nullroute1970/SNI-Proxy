@@ -17,6 +17,7 @@ import asyncio
 import concurrent.futures
 import ctypes
 import dataclasses
+import datetime
 import json
 import logging
 import os
@@ -86,6 +87,87 @@ logging.basicConfig(
     handlers=[RichHandler(console=console, show_path=False, markup=False, rich_tracebacks=True)],
 )
 logger = logging.getLogger(__name__)
+
+# ----- Per-Run Log File -----
+# Set by _setup_file_logging() at startup; kept open for the duration of the session.
+_log_file = None  # TextIOWrapper when active, None until _setup_file_logging() runs
+_log_file_path: str | None = None
+
+
+def _setup_file_logging() -> str:
+    """Create the logs/ directory, open a timestamped log file, and attach a FileHandler
+    to the root logger so all existing logger.* calls are captured automatically."""
+    global _log_file, _log_file_path
+    logs_dir = os.path.join(get_exe_dir(), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = os.path.join(logs_dir, f"{timestamp}.log")
+    _log_file_path = log_path
+    _log_file = open(log_path, "a", encoding="utf-8")  # noqa: WPS515
+
+    # Attach a FileHandler to the root logger so every logger.* call in the app
+    # is automatically written to the file without touching any call sites.
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-8s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    logging.getLogger().addHandler(file_handler)
+
+    # Write a human-readable session header directly to the file.
+    _log_file.write(
+        f"=== Session started {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n\n"
+    )
+    _log_file.flush()
+    return log_path
+
+
+def _log_scan_results(results: "list[SniResult]", title: str) -> None:
+    """Write a plain-text SNI scan result table to the open log file."""
+    if _log_file is None:
+        return
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _log_file.write(f"\n=== {title} ({now}) — {len(results)} SNI(s) ===\n")
+
+    col_w = {"sni": 30, "ip": 17, "status": 9, "tls": 5, "latency": 10, "hops": 6, "cdn": 20}
+    header = (
+        f"{'SNI':<{col_w['sni']}}  {'IP':<{col_w['ip']}}  {'Status':<{col_w['status']}}"
+        f"  {'TLS':<{col_w['tls']}}  {'Latency':<{col_w['latency']}}  {'Hops':<{col_w['hops']}}"
+        f"  {'CDN':<{col_w['cdn']}}\n"
+    )
+    separator = "-" * (sum(col_w.values()) + 2 * (len(col_w) - 1)) + "\n"
+    _log_file.write(separator)
+    _log_file.write(header)
+    _log_file.write(separator)
+
+    for r in results:
+        if r is None:
+            continue
+        if r.tls_ok:
+            status = "TCP+TLS"
+        elif r.tcp_ok:
+            status = "TCP"
+        elif r.ip is not None and r.tcp_fail_reason in ("timeout", None):
+            status = "timeout"
+        elif r.ip is not None:
+            status = r.tcp_fail_reason or "refused"
+        else:
+            status = "DNS fail"
+
+        tls = "yes" if r.tls_ok else ("no" if r.tls_ok is False else "-")
+        latency = f"{r.latency_ms:.0f} ms" if r.latency_ms is not None else "-"
+        hops = str(r.ttl_hops) if r.ttl_hops is not None else "-"
+        ip = r.ip or "-"
+        cdn = r.cdn or "-"
+
+        _log_file.write(
+            f"{r.sni:<{col_w['sni']}}  {ip:<{col_w['ip']}}  {status:<{col_w['status']}}"
+            f"  {tls:<{col_w['tls']}}  {latency:<{col_w['latency']}}  {hops:<{col_w['hops']}}"
+            f"  {cdn:<{col_w['cdn']}}\n"
+        )
+
+    _log_file.write(separator)
+    _log_file.flush()
 
 
 def ensure_firewall_rule(port: int) -> None:
@@ -187,6 +269,7 @@ SCAN_DEGRADED_RETRIES = config.get("SCAN_DEGRADED_RETRIES", 2) # Extra attempts 
 SCAN_DEGRADED_TIMEOUT = config.get("SCAN_DEGRADED_TIMEOUT", 5.0) # Timeout (seconds) for degraded-SNI retry attempts
 AUTO_SELECT_SNI = config.get("AUTO_SELECT_SNI", False)          # Auto-pick best SNI without prompt
 AUTO_SELECT_INTERVAL = config.get("AUTO_SELECT_INTERVAL", 5)    # Minutes between background SNI re-scans (0 = disabled)
+LOG_TO_FILE = config.get("LOG_TO_FILE", False)                  # Write a per-run log file to logs/ (false = disabled)
 
 # Performance tuning
 RELAY_BUFFER_SIZE = config.get("RELAY_BUFFER_SIZE", 262144)     # Read buffer size per relay direction (bytes)
@@ -680,6 +763,7 @@ def select_sni_interactive():
 
     console.rule("[bold cyan]SNI Scanner[/bold cyan]")
     results = _run_scan(snis, use_cache=True)
+    _log_scan_results(results, "Initial SNI Scan")
 
     def _display_results(results: list[SniResult]) -> list[SniResult]:
         """Sort, display, and return the display-ordered list."""
@@ -755,6 +839,9 @@ def select_sni_interactive():
         CONNECT_IP = best.ip
         INTERFACE_IPV4 = get_default_interface_ipv4(CONNECT_IP)
         console.print(f"  [bold green]Auto-selected:[/bold green] {best.sni} [dim]→[/dim] {best.ip}")
+        if _log_file is not None:
+            _log_file.write(f"[Selected] {best.sni} -> {best.ip}\n")
+            _log_file.flush()
         return
 
     # Interactive prompt with rescan support
@@ -781,6 +868,7 @@ def select_sni_interactive():
                 pass
             console.rule("[bold cyan]Rescanning[/bold cyan]")
             results = _run_scan(snis, use_cache=False)
+            _log_scan_results(results, "SNI Rescan")
             display_list = _display_results(results)
             continue
 
@@ -802,6 +890,9 @@ def select_sni_interactive():
             CONNECT_IP = r.ip
             INTERFACE_IPV4 = get_default_interface_ipv4(CONNECT_IP)
             console.print(f"  [bold green]Selected:[/bold green] {r.sni} [dim]→[/dim] {r.ip}")
+            if _log_file is not None:
+                _log_file.write(f"[Selected] {r.sni} -> {r.ip}\n")
+                _log_file.flush()
             return
         console.print(f"  [yellow]Enter a number between 1 and {len(display_list)}.[/yellow]")
 
@@ -862,8 +953,13 @@ def _background_sni_refresh():
     """
     global FAKE_SNI_STR, FAKE_SNI, CONNECT_IP, INTERFACE_IPV4
 
+    cycle = 0
     while True:
+        global _next_sni_refresh_time
+        _next_sni_refresh_time = time.monotonic() + AUTO_SELECT_INTERVAL * 60
         time.sleep(AUTO_SELECT_INTERVAL * 60)
+        _next_sni_refresh_time = None
+        cycle += 1
         try:
             snis = load_snis()
             if not snis:
@@ -871,10 +967,14 @@ def _background_sni_refresh():
                 continue
 
             results = _run_scan(snis, use_cache=False, show_progress=False)
+            _log_scan_results(results, f"Background Refresh #{cycle}")
             best = _pick_best_result(results)
 
             if best is None:
                 logger.warning("[SNI refresh] No reachable SNI found during background scan.")
+                if _log_file is not None:
+                    _log_file.write(f"[No reachable SNI] Background Refresh #{cycle} — no valid SNI found\n")
+                    _log_file.flush()
                 continue
 
             with _sni_lock:
@@ -890,31 +990,53 @@ def _background_sni_refresh():
                     CONNECT_IP = best.ip
                     INTERFACE_IPV4 = get_default_interface_ipv4(best.ip)
 
+            if sni_changed or ip_changed:
+                # Build detail string for the new SNI
+                lat_part = f"  [dim]latency {best.latency_ms:.0f} ms[/dim]" if best.latency_ms is not None else ""
+                tls_part = (
+                    "  [bold green]TLS ✓[/bold green]" if best.tls_ok
+                    else ("  [bold yellow]TCP only[/bold yellow]" if best.tcp_ok else "  [bold red]unreachable[/bold red]")
+                )
+                cdn_part = f"  [dim]{best.cdn}[/dim]" if best.cdn not in ("Unknown", "") else ""
+                hops_part = f"  [dim]~{best.ttl_hops} hops[/dim]" if best.ttl_hops is not None else ""
+
             if sni_changed:
                 console.print(
                     f"  [bold magenta]\\[SNI refresh][/bold magenta] "
                     f"Switched SNI: [yellow]{old_sni}[/yellow] [dim]→[/dim] "
-                    f"[green]{best.sni}[/green] ([dim]{best.ip}[/dim])"
+                    f"[green]{best.sni}[/green] [dim]({best.ip})[/dim]"
+                    f"{tls_part}{lat_part}{hops_part}{cdn_part}"
                 )
+                if _log_file is not None:
+                    _log_file.write(f"[Selected] {best.sni} -> {best.ip}  (switched from {old_sni})\n")
+                    _log_file.flush()
                 _restart_injector()
             elif ip_changed:
                 console.print(
                     f"  [bold magenta]\\[SNI refresh][/bold magenta] "
                     f"IP updated for [green]{best.sni}[/green]: "
                     f"[yellow]{old_ip}[/yellow] [dim]→[/dim] [green]{best.ip}[/green]"
+                    f"{tls_part}{lat_part}{hops_part}{cdn_part}"
                 )
+                if _log_file is not None:
+                    _log_file.write(f"[Selected] {best.sni} -> {best.ip}  (IP changed from {old_ip})\n")
+                    _log_file.flush()
                 _restart_injector()
             else:
                 logger.debug("[SNI refresh] No change — still using %s -> %s", best.sni, best.ip)
+                if _log_file is not None:
+                    _log_file.write(f"[No change] {best.sni} -> {best.ip}\n")
+                    _log_file.flush()
 
         except Exception:
             logger.exception("[SNI refresh] Unexpected error during background SNI refresh.")
+        finally:
+            _next_sni_refresh_time = None
 
 
 async def _one_way_relay(sock_in: socket.socket, sock_out: socket.socket):
     """Relay data from sock_in to sock_out until EOF or error."""
     loop = asyncio.get_running_loop()
-    _accum = 0
     try:
         while True:
             data = await loop.sock_recv(sock_in, RELAY_BUFFER_SIZE)
@@ -922,10 +1044,7 @@ async def _one_way_relay(sock_in: socket.socket, sock_out: socket.socket):
                 # Clean close — peer sent FIN
                 return
             await loop.sock_sendall(sock_out, data)
-            _accum += len(data)
-            if _accum >= RELAY_BUFFER_SIZE:
-                metrics.bytes_transferred(_accum)
-                _accum = 0
+            metrics.bytes_transferred(len(data))
     except ConnectionResetError:
         logger.debug("Connection reset by peer (%s -> %s)",
                      sock_in.getpeername() if sock_in.fileno() != -1 else "?",
@@ -936,9 +1055,6 @@ async def _one_way_relay(sock_in: socket.socket, sock_out: socket.socket):
         logger.debug("Connection broken: %s", exc)
         metrics.relay_broken()
         raise
-    finally:
-        if _accum:
-            metrics.bytes_transferred(_accum)
 
 
 async def relay_bidirectional(sock_a: socket.socket, sock_b: socket.socket):
@@ -951,6 +1067,17 @@ async def relay_bidirectional(sock_a: socket.socket, sock_b: socket.socket):
         try:
             t.result()
         except Exception:
+            pass
+    # Close both sockets before waiting for the pending task to finish.
+    # On Windows, IOCP WSARecv/WSASend cancellation (CancelIoEx) is
+    # asynchronous and can take an arbitrarily long time to deliver the
+    # abort completion.  Closing the sockets immediately forces any
+    # pending operation to complete with an error, so `await t` returns
+    # in microseconds instead of potentially hanging forever.
+    for s in (sock_a, sock_b):
+        try:
+            s.close()
+        except OSError:
             pass
     for t in pending:
         t.cancel()
@@ -1241,16 +1368,28 @@ def _make_metrics_panel(s: dict, prev_bytes: int, prev_time: float) -> Panel:
     else:
         panel_content = table
 
+    subtitle_parts = [f"[dim]refreshes every {METRICS_INTERVAL}s · Ctrl+C to stop[/dim]"]
+    if AUTO_SELECT_SNI and AUTO_SELECT_INTERVAL > 0 and _next_sni_refresh_time is not None:
+        remaining = max(0, int(_next_sni_refresh_time - time.monotonic()))
+        rm, rs = divmod(remaining, 60)
+        subtitle_parts.append(f"[dim magenta]next SNI scan in {rm:02d}:{rs:02d}[/dim magenta]")
+    elif AUTO_SELECT_SNI and AUTO_SELECT_INTERVAL > 0:
+        subtitle_parts.append("[dim magenta]SNI scan running…[/dim magenta]")
+
     return Panel(
         panel_content,
         title="[bold cyan]Live Metrics[/bold cyan]",
         border_style="cyan",
-        subtitle=f"[dim]refreshes every {METRICS_INTERVAL}s · Ctrl+C to stop[/dim]",
+        subtitle=" · ".join(subtitle_parts),
     )
 
 
 # Module-level live dashboard handle — shared between _dashboard_loop and shutdown
 _live_dashboard: Live | None = None
+
+# Timestamp (monotonic) of when the next background SNI refresh scan will start.
+# None while scanning is in progress or refresh is disabled.
+_next_sni_refresh_time: float | None = None
 
 
 async def _dashboard_loop(interval: int):
@@ -1362,6 +1501,22 @@ async def main():
     mother_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
     mother_sock.listen()
     loop = asyncio.get_running_loop()
+
+    # Suppress the benign Windows IOCP "WinError 6: The handle is invalid" noise that
+    # asyncio logs when it tries to cancel an overlapped I/O operation on a socket that
+    # was already closed (our relay_bidirectional closes sockets before cancelling tasks).
+    def _exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        exc = context.get("exception")
+        if (
+            isinstance(exc, OSError)
+            and getattr(exc, "winerror", None) == 6
+            and "Cancelling an overlapped future" in context.get("message", "")
+        ):
+            return  # Expected on Windows when socket is closed before task cancel
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_exception_handler)
+
     # Accept loop: each incoming connection is handled concurrently as an async task
     while True:
         incoming_sock, addr = await loop.sock_accept(mother_sock)
@@ -1376,6 +1531,11 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Create logs/ directory and open a timestamped log file for this session
+    # (only when LOG_TO_FILE = true in config.toml).
+    if LOG_TO_FILE:
+        _setup_file_logging()
+
     # Print startup banner
     _print_banner()
 

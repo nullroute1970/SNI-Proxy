@@ -4,6 +4,8 @@ A Windows-based TCP proxy that bypasses **Deep Packet Inspection (DPI)** firewal
 
 > Originally developed to help users in censored networks (e.g. Iran) access the free internet.
 
+![SNI-Proxy Terminal Output](images/sni-proxy2.PNG)
+
 ---
 
 ## 📬 Contact & Support
@@ -153,6 +155,7 @@ SNI-Proxy/
 ├── config.toml              # Runtime configuration (TOML format with parameter descriptions)
 ├── sni_list.txt             # List of SNI domains to check and select from at startup
 ├── requirements.txt         # Python dependencies
+├── logs/                    # Per-run log files — auto-created on first run (safe to delete)
 └── utils/
     ├── network_tools.py     # Local interface IP detection
     └── packet_templates.py  # TLS ClientHello / ServerHello packet builder & parser
@@ -357,7 +360,7 @@ Key parameters:
 
 | Parameter | Description | Default |
 |---|---|---|
-| `LISTEN_HOST` | Local address the proxy listens on | `"127.0.0.1"` |
+| `LISTEN_HOST` | Local address the proxy listens on | `"0.0.0.0"` |
 | `LISTEN_PORT` | Local port the proxy listens on | `40443` |
 | `CONNECT_PORT` | (Optional) Target server port | `443` |
 | `BYPASS_METHOD` | DPI evasion technique to use (see [Bypass Techniques](#bypass-techniques)) | `"wrong_seq"` |
@@ -367,37 +370,39 @@ Key parameters:
 | `IP_FRAG_OFFSET` | Fragment split offset for `ip_fragmentation` (must be multiple of 8) | `8` |
 | `TLS_RECORD_FRAG_SIZE` | Bytes per TLS record fragment for `tls_record_frag` | `5` |
 | `URGENT_POINTER_SIZE` | Urgent data prefix size for `tcp_urgent_pointer` | `3` |
-| `BYPASS_TIMEOUT` | Seconds to wait for bypass confirmation (injection methods) | `2` |
+| `BYPASS_TIMEOUT` | Seconds to wait for bypass confirmation (injection methods) | `8` |
 | `CLIENT_DATA_TIMEOUT` | Seconds to wait for client's first data (segmentation methods) | `5` |
 | `FAKE_INJECT_DELAY` | Seconds to delay before injecting the fake packet | `0.001` |
-| `KEEPALIVE_IDLE` | Seconds idle before first TCP keep-alive probe | `11` |
-| `KEEPALIVE_INTERVAL` | Seconds between TCP keep-alive probes | `2` |
-| `KEEPALIVE_COUNT` | Max keep-alive probes before dropping connection | `3` |
+| `KEEPALIVE_IDLE` | Seconds idle before first TCP keep-alive probe | `60` |
+| `KEEPALIVE_INTERVAL` | Seconds between TCP keep-alive probes | `10` |
+| `KEEPALIVE_COUNT` | Max keep-alive probes before dropping connection | `5` |
 | `METRICS_INTERVAL` | Seconds between console metrics output (`0` = disabled) | `10` |
 | `SHOW_FAILED_SNIS` | Show DNS-fail SNIs (no IP) in the selection list; **Degraded** SNIs (TCP fail, IP known) are always shown | `true` |
 | `SCAN_WORKERS` | Concurrent threads for SNI scanning | `20` |
 | `SCAN_TIMEOUT` | Per-SNI scan timeout (seconds) | `2.0` |
 | `SCAN_TLS_PROBE` | Verify TLS handshake during scan (not just TCP) | `true` |
 | `SCAN_TTL_PROBE` | Estimate hop count via ICMP ping | `true` |
-| `SCAN_CACHE_TTL` | Seconds to cache scan results (`0` = always rescan) | `300` |
-| `SCAN_DEGRADED_RETRIES` | Extra retry attempts for timeout-degraded SNIs (`0` = disabled) | `2` |
+| `SCAN_CACHE_TTL` | Seconds to cache scan results (`0` = always rescan) | `0` |
+| `SCAN_DEGRADED_RETRIES` | Extra retry attempts for timeout-degraded SNIs (`0` = disabled) | `0` |
 | `SCAN_DEGRADED_TIMEOUT` | Timeout per retry attempt for degraded SNIs (seconds) | `5.0` |
 | `AUTO_SELECT_SNI` | Auto-pick best SNI without interactive prompt | `false` |
 | `AUTO_SELECT_INTERVAL` | Minutes between background SNI re-scans (only when `AUTO_SELECT_SNI = true`, `0` = disabled) | `5` |
-| `MAX_CONNECTIONS` | Max simultaneous proxy connections (`0` = unlimited) | `100` || `RELAY_BUFFER_SIZE` | Read buffer size per relay direction in bytes (4096–1048576) | `262144` |
+| `LOG_TO_FILE` | Write a timestamped log file to `logs/` on each run | `false` |
+| `MAX_CONNECTIONS` | Max simultaneous proxy connections (`0` = unlimited) | `0` |
+| `RELAY_BUFFER_SIZE` | Read buffer size per relay direction in bytes (4096–1048576) | `262144` |
 | `SOCKET_BUFFER_SIZE` | OS-level socket send/receive buffer size in bytes (4096–4194304) | `262144` |
-| `INJECTION_POOL_SIZE` | Worker threads for fake packet injection (1–256) | `32` |
+| `INJECTION_POOL_SIZE` | Worker threads for fake packet injection (1–256) | `64` |
 Edit `config.toml` before running. Only `LISTEN_HOST` and `LISTEN_PORT` are required (SNI is configured in `sni_list.txt`):
 
 ```toml
-LISTEN_HOST = "127.0.0.1"
+LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 40443
 ```
 
 Full configuration with all options:
 
 ```toml
-LISTEN_HOST = "127.0.0.1"
+LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 40443
 CONNECT_PORT = 443
 BYPASS_METHOD = "wrong_seq"
@@ -407,24 +412,28 @@ SEGMENT_DELAY = 0.001
 IP_FRAG_OFFSET = 8
 TLS_RECORD_FRAG_SIZE = 5
 URGENT_POINTER_SIZE = 3
-BYPASS_TIMEOUT = 2
+BYPASS_TIMEOUT = 8
 CLIENT_DATA_TIMEOUT = 5
 FAKE_INJECT_DELAY = 0.001
-KEEPALIVE_IDLE = 11
-KEEPALIVE_INTERVAL = 2
-KEEPALIVE_COUNT = 3
+KEEPALIVE_IDLE = 60
+KEEPALIVE_INTERVAL = 10
+KEEPALIVE_COUNT = 5
 METRICS_INTERVAL = 10
 SHOW_FAILED_SNIS = true
 SCAN_WORKERS = 20
 SCAN_TIMEOUT = 2.0
 SCAN_TLS_PROBE = true
 SCAN_TTL_PROBE = true
-SCAN_CACHE_TTL = 300
-SCAN_DEGRADED_RETRIES = 2
+SCAN_CACHE_TTL = 0
+SCAN_DEGRADED_RETRIES = 0
 SCAN_DEGRADED_TIMEOUT = 5.0
 AUTO_SELECT_SNI = false
 AUTO_SELECT_INTERVAL = 5
-MAX_CONNECTIONS = 100
+LOG_TO_FILE = false
+MAX_CONNECTIONS = 0
+RELAY_BUFFER_SIZE = 262144
+SOCKET_BUFFER_SIZE = 262144
+INJECTION_POOL_SIZE = 64
 ```
 
 | Key | Description |
@@ -439,27 +448,28 @@ MAX_CONNECTIONS = 100
 | `IP_FRAG_OFFSET` | *(Optional)* Split offset in bytes for `ip_fragmentation` (must be a multiple of 8). Defaults to `8`. |
 | `TLS_RECORD_FRAG_SIZE` | *(Optional)* Bytes per TLS record fragment for `tls_record_frag`. Defaults to `5`. |
 | `URGENT_POINTER_SIZE` | *(Optional)* Urgent pointer value for `tcp_urgent_pointer`. Defaults to `3`. |
-| `BYPASS_TIMEOUT` | *(Optional)* Seconds to wait for the packet injector to confirm bypass success. Defaults to `2`. Increase on high-latency networks. |
+| `BYPASS_TIMEOUT` | *(Optional)* Seconds to wait for the packet injector to confirm bypass success. Defaults to `8`. Increase on high-latency networks. |
 | `CLIENT_DATA_TIMEOUT` | *(Optional)* Seconds to wait for the client's first data (used by `tcp_segmentation` and `tls_record_frag`). Defaults to `5`. |
 | `FAKE_INJECT_DELAY` | *(Optional)* Seconds to delay before injecting the fake packet after the handshake ACK. Defaults to `0.001` (1 ms). |
-| `KEEPALIVE_IDLE` | *(Optional)* Seconds of idle time before the first TCP keep-alive probe. Defaults to `11`. |
-| `KEEPALIVE_INTERVAL` | *(Optional)* Seconds between successive TCP keep-alive probes. Defaults to `2`. |
-| `KEEPALIVE_COUNT` | *(Optional)* Maximum keep-alive probes before the connection is dropped. Defaults to `3`. |
+| `KEEPALIVE_IDLE` | *(Optional)* Seconds of idle time before the first TCP keep-alive probe. Defaults to `60`. |
+| `KEEPALIVE_INTERVAL` | *(Optional)* Seconds between successive TCP keep-alive probes. Defaults to `10`. |
+| `KEEPALIVE_COUNT` | *(Optional)* Maximum keep-alive probes before the connection is dropped. Defaults to `5`. |
 | `METRICS_INTERVAL` | *(Optional)* Seconds between printing connection metrics to the console. Set to `0` to disable. Defaults to `10`. |
 | `SHOW_FAILED_SNIS` | *(Optional)* Whether to show SNIs that failed **DNS resolution** (no IP) in the selection list. SNIs that resolved DNS but failed TCP connect are always shown as **Degraded** — they may still work despite the TCP check failing. `true` shows DNS-fail SNIs too; `false` hides them so only reachable and degraded SNIs appear. Defaults to `true`. |
 | `SCAN_WORKERS` | *(Optional)* Number of concurrent threads used for parallel SNI scanning. Higher values speed up large lists. Defaults to `20`. |
 | `SCAN_TIMEOUT` | *(Optional)* Per-SNI timeout in seconds for DNS + TCP + TLS probes. Increase on high-latency networks. Defaults to `2.0`. |
 | `SCAN_TLS_PROBE` | *(Optional)* When `true`, the scanner verifies a full TLS handshake after TCP connect — a stronger reachability signal. Set to `false` for TCP-only checks (faster). Defaults to `true`. |
 | `SCAN_TTL_PROBE` | *(Optional)* When `true`, the scanner pings each reachable IP to estimate hop count (useful for tuning `FAKE_TTL`). Set to `false` to skip (faster, or if ICMP is blocked). Defaults to `true`. |
-| `SCAN_CACHE_TTL` | *(Optional)* Seconds to cache scan results in `sni_scan_cache.json`. Subsequent launches within this window reuse cached results. Set to `0` to always rescan. Defaults to `300`. |
-| `SCAN_DEGRADED_RETRIES` | *(Optional)* Number of extra retry attempts for SNIs that timed out during the main parallel scan. Each retry uses `SCAN_DEGRADED_TIMEOUT`. A successful retry promotes the SNI to fully reachable; a "refused" response on retry downgrades it further. Set to `0` to disable. Defaults to `2`. |
+| `SCAN_CACHE_TTL` | *(Optional)* Seconds to cache scan results in `sni_scan_cache.json`. Subsequent launches within this window reuse cached results. Set to `0` to always rescan. Defaults to `0`. |
+| `SCAN_DEGRADED_RETRIES` | *(Optional)* Number of extra retry attempts for SNIs that timed out during the main parallel scan. Each retry uses `SCAN_DEGRADED_TIMEOUT`. A successful retry promotes the SNI to fully reachable; a "refused" response on retry downgrades it further. Set to `0` to disable. Defaults to `0`. |
 | `SCAN_DEGRADED_TIMEOUT` | *(Optional)* Timeout in seconds for each degraded-SNI retry attempt. Should be longer than `SCAN_TIMEOUT` to give slow or rate-limited servers a fair chance. Defaults to `5.0`. |
 | `AUTO_SELECT_SNI` | *(Optional)* When `true`, the scanner auto-selects the best SNI (TLS verified, lowest latency) without showing the interactive prompt. Defaults to `false`. |
 | `AUTO_SELECT_INTERVAL` | *(Optional)* How often (in **minutes**) to re-scan SNIs in the background and switch to the best available one. Only active when `AUTO_SELECT_SNI = true`. If only the resolved IP changes (e.g. CDN rotation), the same domain is kept but the connection target is updated and the WinDivert filter is restarted. Set to `0` to disable background refresh. Defaults to `5`. |
-| `MAX_CONNECTIONS` | *(Optional)* Maximum number of simultaneous proxy connections. New connections wait when the limit is reached. Set to `0` for unlimited (not recommended in production). Defaults to `100`. |
+| `LOG_TO_FILE` | *(Optional)* When `true`, a timestamped log file is created in the `logs/` folder on every run. The file captures all log messages and SNI scan result tables. Set to `false` to disable file logging (default). See [Logging](#logging). |
+| `MAX_CONNECTIONS` | *(Optional)* Maximum number of simultaneous proxy connections. New connections wait when the limit is reached. Set to `0` for unlimited (not recommended in production). Defaults to `0`. |
 | `RELAY_BUFFER_SIZE` | *(Optional, advanced)* Read buffer size in bytes used per relay direction when forwarding data between client and server. Larger values reduce syscall overhead on fast/high-latency links; reduce on memory-constrained systems. Must be 4096–1048576. Defaults to `262144` (256 KB). |
 | `SOCKET_BUFFER_SIZE` | *(Optional, advanced)* OS-level `SO_RCVBUF`/`SO_SNDBUF` set on every proxy socket. Helps on high-bandwidth links by letting the kernel buffer more data in flight. Must be 4096–4194304. Defaults to `262144` (256 KB). |
-| `INJECTION_POOL_SIZE` | *(Optional, advanced)* Number of threads in the shared pool used for fake packet injection. Each active bypass occupies a thread for ~1 ms. Increase for hundreds of new connections per second; reduce on resource-constrained systems. Must be 1–256. Has no effect for `tcp_segmentation` or `tls_record_frag`. Defaults to `32`. |
+| `INJECTION_POOL_SIZE` | *(Optional, advanced)* Number of threads in the shared pool used for fake packet injection. Each active bypass occupies a thread for ~1 ms. Increase for hundreds of new connections per second; reduce on resource-constrained systems. Must be 1–256. Has no effect for `tcp_segmentation` or `tls_record_frag`. Defaults to `64`. |
 
 ---
 
@@ -703,7 +713,7 @@ In interactive mode (default), you can:
 
 ## Terminal Output
 
-![SNI-Proxy Terminal Output](images/sni-proxy.PNG)
+![SNI-Proxy Terminal Output](images/sni-proxy2.PNG)
 
 All console output uses [`rich`](https://pypi.org/project/rich/) for styled, structured terminal UI.
 
@@ -856,6 +866,65 @@ The following improvements have been made to the proxy for better reliability an
 - **Shared injection thread pool**: Fake packet injection now uses a `ThreadPoolExecutor` (default 32 workers, configurable via `INJECTION_POOL_SIZE` in `config.toml`) instead of spawning and destroying a new OS thread per bypass, eliminating thread-creation overhead at high connection rates.
 - **Batched byte-count metrics**: `bytes_transferred()` is called at most once per 256 KB of relayed data (or on connection close) instead of on every `recv`, removing the per-packet mutex acquisition from the relay hot path.
 - **Cached bypass handler dispatch**: The per-method handler dict inside `FakeTcpInjector` is built once at injector startup (in `__init__`) and reused across all connections, removing per-call dictionary construction.
+
+---
+
+## Logging
+
+Every time the app starts, a new timestamped log file is created inside the `logs/` folder (located next to `config.toml` and the exe). The folder is created automatically on first run.
+
+### Enabling file logging
+
+File logging is **disabled by default**. To enable it, set `LOG_TO_FILE = true` in `config.toml`:
+
+```toml
+LOG_TO_FILE = true
+```
+
+### File naming
+
+```
+logs/YYYY-MM-DD_HH-MM-SS.log
+```
+
+A new file is created each run; within a single run all output is appended to the same file.
+
+### What is logged
+
+| Content | When |
+|---|---|
+| `=== Session started … ===` header | On startup, before anything else |
+| All `logger.*` messages (INFO, WARNING, DEBUG, ERROR, CRITICAL) | Throughout the session — firewall rules, duplicate SNI cleanup, injector restarts, refresh warnings, etc. |
+| Initial SNI scan results table | After the startup scan completes |
+| SNI rescan results table | Each time the user types `r` at the selection prompt |
+| `[Selected] sni → ip` | When an SNI is chosen (auto-select or interactive) |
+| Background refresh scan table | Each background refresh cycle (one per `AUTO_SELECT_INTERVAL` minutes) |
+| `[Selected] sni → ip` with change detail | When a background refresh switches to a new SNI or updates the IP |
+| `[No change] sni → ip` | When a background refresh confirms no change |
+
+### Scan result table format
+
+Scan tables are written as plain-text columns (no Rich markup):
+
+```
+=== Initial SNI Scan (2026-04-18 12:34:56) — 6 SNI(s) ===
+----------------------------------------------------------------------
+SNI                             IP                 Status     TLS    Latency     Hops    CDN
+----------------------------------------------------------------------
+auth.vercel.com                 76.76.21.21        TCP+TLS    yes    45 ms       5       Cloudflare
+cloudflare.com                  104.16.132.229     TCP+TLS    yes    38 ms       3       Cloudflare
+sourceforge.net                 216.105.38.13      TCP        no     92 ms       8       Unknown
+timeout.example.com             93.184.216.34      timeout    -      -           -       CloudFront
+refused.example.com             198.51.100.1       refused    -      -           -       Unknown
+broken.example.com              -                  DNS fail   -      -           -       -
+----------------------------------------------------------------------
+```
+
+### Notes
+
+- The `logs/` folder is **safe to delete** at any time — it will be recreated on the next run.
+- Log files from previous sessions are never overwritten; each run produces its own file.
+- Background refresh is only active when both `AUTO_SELECT_SNI = true` and `AUTO_SELECT_INTERVAL > 0`.
 
 ---
 
