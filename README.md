@@ -1,5 +1,9 @@
 # SNI-Proxy
 
+> [!IMPORTANT]
+> This project is archived and no longer maintained.
+> Please use [ZeroDPI](https://github.com/nullroute1970/ZeroDPI) instead.
+
 A Windows-based TCP proxy that bypasses **Deep Packet Inspection (DPI)** firewalls by injecting a fake TLS ClientHello with a spoofed SNI (Server Name Indication) using low-level IP/TCP header manipulation via WinDivert.
 
 > Originally developed to help users in censored networks (e.g. Iran) access the free internet.
